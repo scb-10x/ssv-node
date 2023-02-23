@@ -1,0 +1,96 @@
+version: "3.9"
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: 100m
+      max-file: "3"
+      tag: '{{.ImageName}}|{{.Name}}|{{.ImageFullID}}|{{.FullID}}'
+
+services:
+  execution:
+    restart: "unless-stopped"
+    stop_grace_period: 5m
+    stop_signal: SIGINT
+    build:
+      context: ./nethermind
+      dockerfile: ${NM_DOCKERFILE}
+      args:
+        - BUILD_TARGET=${NM_SRC_BUILD_TARGET}
+        - DOCKER_TAG=${NM_DOCKER_TAG}
+    image: nethermind:local
+    user: nethermind
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - EL_EXTRAS=${EL_EXTRAS:-}
+      - ARCHIVE_NODE=${ARCHIVE_NODE:-}
+    volumes:
+      - nm-eth1-data:/var/lib/nethermind
+      - /etc/localtime:/etc/localtime:ro
+      - jwtsecret:/var/lib/nethermind/ee-secret
+    ports:
+      - ${HOST_IP:-0.0.0.0}:${EL_P2P_PORT:-30303}:${EL_P2P_PORT:-30303}/tcp
+      - ${HOST_IP:-0.0.0.0}:${EL_P2P_PORT:-30303}:${EL_P2P_PORT:-30303}/udp
+    networks:
+      default:
+        aliases:
+          - eth1
+    <<: *logging
+    entrypoint:
+      - docker-entrypoint.sh
+      - dotnet
+      - /nethermind/Nethermind.Runner.dll
+      - --datadir
+      - /var/lib/nethermind
+      - --Init.WebSocketsEnabled
+      - "true"
+      - --Network.DiscoveryPort
+      - ${EL_P2P_PORT:-30303}
+      - --Network.P2PPort
+      - ${EL_P2P_PORT:-30303}
+      - --Network.MaxActivePeers
+      - ${EL_MAX_PEER_COUNT:-50}
+      - --HealthChecks.Enabled
+      - "true"
+      - --HealthChecks.UIEnabled
+      - "true"
+      - --JsonRpc.Enabled
+      - "true"
+      - --JsonRpc.Host
+      - 0.0.0.0
+      - --JsonRpc.Port
+      - ${EL_RPC_PORT:-8545}
+      - --JsonRpc.WebSocketsPort
+      - ${EL_WS_PORT:-8546}
+      - --JsonRpc.EngineHost
+      - 0.0.0.0
+      - --JsonRpc.EnginePort
+      - ${EE_PORT:-8551}
+      - --JsonRpc.EnabledModules
+      - "Web3,Eth,Subscribe,Net,Health,Parity,Proof,Trace,TxPool"
+      - --JsonRpc.AdditionalRpcUrls=http://127.0.0.1:1337|http|admin
+      - --JsonRpc.JwtSecretFile=/var/lib/nethermind/ee-secret/jwtsecret
+      - --JsonRpc.MaxBatchSize
+      - "10000"
+      - --Metrics.Enabled
+      - "true"
+      - --Metrics.PushGatewayUrl
+      - ""
+      - --Metrics.ExposePort
+      - "6060"
+      - --config
+      - ${NETWORK}
+      - --Sync.AncientBodiesBarrier
+      - "1"
+      - --Sync.AncientReceiptsBarrier
+      - "1"
+      - --Pruning.FullPruningMaxDegreeOfParallelism
+      - "2"
+      - --Pruning.FullPruningCompletionBehavior
+      - ShutdownOnSuccess
+      - --log
+      - ${LOG_LEVEL}
+
+volumes:
+  nm-eth1-data:
+  jwtsecret:

@@ -1,0 +1,106 @@
+version: "3.9"
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: 100m
+      max-file: "3"
+      tag: '{{.ImageName}}|{{.Name}}|{{.ImageFullID}}|{{.FullID}}'
+
+services:
+  consensus:
+    restart: "unless-stopped"
+    build:
+      context: ./teku
+      args:
+        - BUILD_TARGET=${TEKU_SRC_BUILD_TARGET}
+        - DOCKER_TAG=${TEKU_DOCKER_TAG}
+      dockerfile: ${TEKU_DOCKERFILE}
+    image: teku:local
+    user: teku
+    stop_grace_period: 1m
+    volumes:
+      - tekuconsensus-data:/var/lib/teku
+      - /etc/localtime:/etc/localtime:ro
+      - jwtsecret:/var/lib/teku/ee-secret
+    environment:
+      - JAVA_OPTS=${TEKU_HEAP:--XX:SoftMaxHeapSize=2g -Xmx5g}
+      - RAPID_SYNC_URL=${RAPID_SYNC_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - MEV_BOOST=${MEV_BOOST}
+      - MEV_NODE=${MEV_NODE}
+      - BEACON_STATS_API=${BEACON_STATS_API}
+      - BEACON_STATS_MACHINE=${BEACON_STATS_MACHINE}
+      - CL_EXTRAS=${CL_EXTRAS:-}
+      - VC_EXTRAS=
+      - ARCHIVE_NODE=${ARCHIVE_NODE:-}
+    ports:
+      - ${HOST_IP:-0.0.0.0}:${CL_P2P_PORT:-9000}:${CL_P2P_PORT:-9000}/tcp
+      - ${HOST_IP:-0.0.0.0}:${CL_P2P_PORT:-9000}:${CL_P2P_PORT:-9000}/udp
+    networks:
+      default:
+        aliases:
+          - eth2
+    <<: *logging
+    entrypoint:
+      - docker-entrypoint.sh
+      - /opt/teku/bin/teku
+      - --data-path=/var/lib/teku
+      - --log-destination=CONSOLE
+      - --network=${NETWORK}
+      - --ee-endpoint=${EL_NODE}
+      - --ee-jwt-secret-file
+      - /var/lib/teku/ee-secret/jwtsecret
+      - --eth1-deposit-contract-max-request-size=1000
+      - --p2p-port=${CL_P2P_PORT:-9000}
+      - --p2p-peer-upper-bound=${CL_MAX_PEER_COUNT:-100}
+      - --p2p-peer-lower-bound=${CL_MIN_PEER_COUNT:-64}
+      - --logging=${LOG_LEVEL}
+      - --rest-api-host-allowlist=*
+      - --rest-api-enabled=true
+      - --rest-api-interface=0.0.0.0
+      - --rest-api-port=${CL_REST_PORT:-5052}
+      - --metrics-enabled=true
+      - --metrics-port=8008
+      - --metrics-interface=0.0.0.0
+      - --metrics-host-allowlist=*
+      - --validators-proposer-default-fee-recipient=${FEE_RECIPIENT}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.${CL_HOST:-cl}.service=${CL_HOST:-cl}
+      - traefik.http.routers.${CL_HOST:-cl}.entrypoints=websecure
+      - traefik.http.routers.${CL_HOST:-cl}.rule=Host(`${CL_HOST:-cl}.${DOMAIN}`)
+      - traefik.http.routers.${CL_HOST:-cl}.tls.certresolver=letsencrypt
+      - traefik.http.routers.${CL_HOST:-cl}lb.service=${CL_HOST:-cl}
+      - traefik.http.routers.${CL_HOST:-cl}lb.entrypoints=websecure
+      - traefik.http.routers.${CL_HOST:-cl}lb.rule=Host(`${CL_LB:-cl-lb}.${DOMAIN}`)
+      - traefik.http.routers.${CL_HOST:-cl}lb.tls.certresolver=letsencrypt
+      - traefik.http.services.${CL_HOST:-cl}.loadbalancer.server.port=${CL_REST_PORT:-5052}
+
+  ssv2-node:
+    restart: "unless-stopped"
+    image: bloxstaking/ssv-node:${SSV2_NODE_TAG:-latest}
+    user: 12000:12000
+    volumes:
+      - ./blox-ssv-config.yaml:/config.yaml
+      - ssv2-data:/tmp
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - ${SSV_P2P_PORT}:${SSV_P2P_PORT}/tcp
+      - ${SSV_P2P_PORT_UDP}:${SSV_P2P_PORT_UDP}/udp
+    <<: *logging
+    environment:
+      - CONFIG_PATH=/config.yaml
+      - HOME=/tmp
+    command: make BUILD_PATH=/go/bin/ssvnode start-node
+
+  ssv-generate-keys:
+    profiles: ["tools"]
+    restart: "no"
+    image: bloxstaking/ssv-node:${SSV2_NODE_TAG:-latest}
+    command: /go/bin/ssvnode generate-operator-keys
+
+volumes:
+  tekuconsensus-data:
+  jwtsecret:
+  ssv2-data:
