@@ -1,0 +1,62 @@
+# Partially from Nethermind github
+FROM mcr.microsoft.com/dotnet/sdk:7.0 AS build
+# Unused, this is here to avoid build time complaints
+ARG DOCKER_TAG
+
+ARG BUILD_TARGET
+
+WORKDIR /
+
+RUN apt-get update -y && apt-get install -y git
+RUN bash -c "\
+    git clone https://github.com/NethermindEth/nethermind && \
+    cd nethermind && \
+    git config advice.detachedHead false && \
+    git fetch --all --tags && \
+    if [[ ${BUILD_TARGET} =~ pr-.+ ]]; then git fetch origin pull/$(echo ${BUILD_TARGET} | cut -d '-' -f 2)/head:nm-pr; \
+    git checkout nm-pr; else \
+    git checkout ${BUILD_TARGET}; fi && \
+    git submodule update --init --recursive && \
+    dotnet publish src/Nethermind/Nethermind.Runner -c release -o out"
+
+FROM ghcr.io/tomwright/dasel:v2.1.1-alpine as dasel
+
+FROM mcr.microsoft.com/dotnet/aspnet:7.0
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install libsnappy-dev libc6-dev libc6 ca-certificates gosu tzdata wget && rm -rf /var/lib/apt/lists/*
+
+ARG USER=nethermind
+ARG UID=10001
+# GID 10002 is deliberate so it can exchange secret with CL
+ARG GID=10002
+
+RUN addgroup \
+    --gid "${GID}" \
+    "${USER}"
+
+RUN adduser \
+    --disabled-password \
+    --gecos "" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" \
+    --ingroup "${USER}" \
+    "${USER}"
+
+WORKDIR /nethermind
+
+# Cannot assume buildkit, hence no chmod
+COPY --from=build --chown=${USER}:${USER} /nethermind/out .
+
+RUN chown -R ${USER}:${USER} /nethermind
+RUN mkdir -p /var/lib/nethermind/ee-secret && chown -R ${USER}:${USER} /var/lib/nethermind && chmod -R 700 /var/lib/nethermind && chmod 777 /var/lib/nethermind/ee-secret
+
+# Cannot assume buildkit, hence no chmod
+COPY --from=dasel --chown=${USER}:${USER} /usr/local/bin/dasel /usr/local/bin/
+COPY --chown=${USER}:${USER} ./docker-entrypoint.sh /usr/local/bin/
+# Belt and suspenders
+RUN chmod -R 755 /usr/local/bin/*
+
+USER ${USER}
+
+ENTRYPOINT ["./Nethermind.Runner"]
